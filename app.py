@@ -16,18 +16,19 @@ class FFTAnalyzerApp:
         self.root = root
         self.root.title("FFT Analyzer - Flight Stand Data Analysis")
         self.root.geometry("1400x900")
-        self.root.minsize(1600, 960)
+        self.root.minsize(1600, 940)
         
         # Data storage
         self.df = None
         self.fft_results = {}  # Store multiple FFT results for combining
-        self.current_colors = ['#000000', "#8B8B8B", "#0095ff", '#ff7f0e', "#22d322", "#ff0000", "#a94cff", '#8c564b']
+        self.original_default_colors = ["#0095ff", '#ff7f0e', "#22d322", "#ff0000", "#a94cff", '#8c564b']
+        self.current_colors = self.original_default_colors.copy()
         self.color_index = 0
         
         # Settings
         self.settings = {
             'peak_labels_count': 5,
-            'default_colors': self.current_colors.copy(),
+            'default_colors': self.original_default_colors.copy(),
             'window_function': 'none',
             'peak_threshold_mode': 'relative',  # 'relative', 'absolute', or 'statistical'
             'peak_relative_threshold': 0.1,  # 10% of max amplitude
@@ -35,7 +36,9 @@ class FFTAnalyzerApp:
             'peak_statistical_factor': 1.0,  # Factor for statistical threshold (mean + factor * std)
             'peak_min_distance': 10,  # Minimum distance between peaks (in frequency bins)
             'skip_dc_component': True,  # Skip DC (0 Hz) component
-            'peak_window_size': 3  # Window size for local maximum detection
+            'peak_window_size': 3,  # Window size for local maximum detection
+            'pin_face_color': 'yellow',  # Pin annotation background color
+            'pin_edge_color': 'orange'   # Pin annotation border color
         }
         
         self.setup_ui()
@@ -100,7 +103,7 @@ class FFTAnalyzerApp:
         self.column_combo.bind('<<ComboboxSelected>>', self.on_column_selected)
         
         # Column rename
-        ttk.Label(data_frame, text="Rename Column (optional):").pack(anchor=tk.W)
+        ttk.Label(data_frame, text="Rename Plot (optional):").pack(anchor=tk.W)
         self.column_name = tk.StringVar()
         ttk.Entry(data_frame, textvariable=self.column_name).pack(fill=tk.X, pady=(5, 10))
         
@@ -148,24 +151,24 @@ class FFTAnalyzerApp:
         ttk.Entry(freq_frame, textvariable=self.freq_var, width=10).pack(side=tk.LEFT)
         ttk.Label(freq_frame, text="Hz").pack(side=tk.LEFT, padx=(5, 0))
         
-        # Study information
-        study_frame = ttk.LabelFrame(parent, text="Study Information", padding="10")
-        study_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(study_frame, text="Study Name:").pack(anchor=tk.W)
-        self.study_name = tk.StringVar(value="FFT Analysis")
-        ttk.Entry(study_frame, textvariable=self.study_name).pack(fill=tk.X, pady=(5, 10))
+        # Analysis information
+        analysis_frame = ttk.LabelFrame(parent, text="Analysis Information", padding="10")
+        analysis_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(analysis_frame, text="Analysis Name:").pack(anchor=tk.W)
+        self.analysis_name = tk.StringVar(value="FFT Analysis")
+        ttk.Entry(analysis_frame, textvariable=self.analysis_name).pack(fill=tk.X, pady=(5, 10))
         
         # Window function
-        ttk.Label(study_frame, text="Window Function:").pack(anchor=tk.W)
+        ttk.Label(analysis_frame, text="Window Function:").pack(anchor=tk.W)
         self.window_var = tk.StringVar(value="none")
-        window_combo = ttk.Combobox(study_frame, textvariable=self.window_var, 
+        window_combo = ttk.Combobox(analysis_frame, textvariable=self.window_var, 
                                 values=["none", "blackman", "hann", "hamming"], 
                                 state="readonly")
         window_combo.pack(fill=tk.X, pady=(5, 10))
         
         # Analysis button
-        ttk.Button(study_frame, text="Run FFT Analysis", 
+        ttk.Button(analysis_frame, text="Run FFT Analysis", 
                 command=self.run_fft_analysis, style="Accent.TButton").pack(fill=tk.X, pady=(10, 0))
         
         # Export section
@@ -200,6 +203,17 @@ class FFTAnalyzerApp:
         self.ax.set_title('FFT Analysis Results')
         self.ax.grid(True, alpha=0.3)
         self.fig.tight_layout()
+        
+        # Initialize hover functionality variables
+        self.hover_annotation = None
+        self.hover_line = None
+        self.current_line_data = None
+        self.permanent_annotations = []  # For click-to-hold annotations
+        
+        # Connect hover events
+        self.canvas.mpl_connect('motion_notify_event', self.on_hover)
+        self.canvas.mpl_connect('axes_leave_event', self.on_leave)
+        self.canvas.mpl_connect('button_press_event', self.on_click)
     
     def setup_settings_tab(self):
         settings_main = ttk.Frame(self.settings_frame)
@@ -326,6 +340,42 @@ class FFTAnalyzerApp:
         self.colors_frame.pack(fill=tk.X, pady=(5, 0))
         self.update_color_display()
         
+        # Pin annotation colors
+        pin_colors_frame = ttk.LabelFrame(color_frame, text="Pin Annotation Colors", padding="10")
+        pin_colors_frame.pack(fill=tk.X, pady=(15, 0))
+        
+        # Face color (background)
+        face_color_frame = ttk.Frame(pin_colors_frame)
+        face_color_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(face_color_frame, text="Background Color:").pack(side=tk.LEFT)
+        self.pin_face_color_var = tk.StringVar(value=self.settings['pin_face_color'])
+        self.face_color_button = tk.Button(face_color_frame, text="    ", 
+                                         bg=self.settings['pin_face_color'], 
+                                         width=4, height=1, relief=tk.RAISED,
+                                         command=self.choose_pin_face_color)
+        self.face_color_button.pack(side=tk.LEFT, padx=(10, 5))
+        self.face_color_label = ttk.Label(face_color_frame, text=self.settings['pin_face_color'])
+        self.face_color_label.pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Edge color (border)
+        edge_color_frame = ttk.Frame(pin_colors_frame)
+        edge_color_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(edge_color_frame, text="Border Color:").pack(side=tk.LEFT)
+        self.pin_edge_color_var = tk.StringVar(value=self.settings['pin_edge_color'])
+        self.edge_color_button = tk.Button(edge_color_frame, text="    ", 
+                                         bg=self.settings['pin_edge_color'], 
+                                         width=4, height=1, relief=tk.RAISED,
+                                         command=self.choose_pin_edge_color)
+        self.edge_color_button.pack(side=tk.LEFT, padx=(10, 5))
+        self.edge_color_label = ttk.Label(edge_color_frame, text=self.settings['pin_edge_color'])
+        self.edge_color_label.pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Reset pin colors button
+        ttk.Button(pin_colors_frame, text="Reset Pin Colors to Default", 
+                command=self.reset_pin_colors).pack(anchor=tk.W, pady=(10, 0))
+        
         # Save settings button
         ttk.Button(scrollable_frame, text="Save Settings", 
                 command=self.save_settings, style="Accent.TButton").pack(pady=20)
@@ -355,11 +405,13 @@ class FFTAnalyzerApp:
         list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
         # Treeview for results
-        self.results_tree = ttk.Treeview(list_frame, columns=('Name', 'Date'), show='tree headings')
+        self.results_tree = ttk.Treeview(list_frame, columns=('Select', 'Name', 'Date'), show='tree headings')
+        self.results_tree.heading('Select', text='☐')
         self.results_tree.heading('#0', text='ID')
-        self.results_tree.heading('Name', text='Study Name')
+        self.results_tree.heading('Name', text='analysis Name')
         self.results_tree.heading('Date', text='Date')
         
+        self.results_tree.column('Select', width=30, anchor='center')
         self.results_tree.column('#0', width=50)
         self.results_tree.column('Name', width=150)
         self.results_tree.column('Date', width=100)
@@ -370,11 +422,19 @@ class FFTAnalyzerApp:
         self.results_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         results_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
+        # Bind click event for checkbox functionality
+        self.results_tree.bind('<Button-1>', self.on_treeview_click)
+        
+        # Store checkbox states
+        self.checkbox_states = {}
+        
         # Control buttons
         controls_frame = ttk.Frame(results_left)
         controls_frame.pack(fill=tk.X)
         
-        ttk.Button(controls_frame, text="Plot Selected", 
+        ttk.Button(controls_frame, text="Select All / Deselect All", 
+                command=self.toggle_all_checkboxes).pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(controls_frame, text="Overlay Selected", 
                 command=self.plot_combined_results).pack(fill=tk.X, pady=(0, 5))
         ttk.Button(controls_frame, text="Remove Selected", 
                 command=self.remove_result).pack(fill=tk.X, pady=(0, 5))
@@ -400,6 +460,17 @@ class FFTAnalyzerApp:
         self.combined_ax.set_title('Combined FFT Results')
         self.combined_ax.grid(True, alpha=0.3)
         self.combined_fig.tight_layout()
+        
+        # Initialize hover functionality for combined plot
+        self.combined_hover_annotation = None
+        self.combined_hover_line = None
+        self.combined_data = {}  # Store combined plot data
+        self.combined_permanent_annotations = []  # For click-to-hold annotations
+        
+        # Connect hover events for combined plot
+        self.combined_canvas.mpl_connect('motion_notify_event', self.on_combined_hover)
+        self.combined_canvas.mpl_connect('axes_leave_event', self.on_combined_leave)
+        self.combined_canvas.mpl_connect('button_press_event', self.on_combined_click)
     
     def select_file(self):
         file_path = filedialog.askopenfilename(
@@ -442,7 +513,7 @@ class FFTAnalyzerApp:
     
     def on_column_selected(self, event=None):
         selected_column = self.column_var.get()
-        if selected_column and not self.column_name.get():
+        if selected_column:
             self.column_name.set(selected_column)
     
     def update_start_label(self, value):
@@ -481,6 +552,475 @@ class FFTAnalyzerApp:
                 text=f"Range: Row {start} to {end} ({lines} points)",
                 foreground="blue"
             )
+    
+    def on_hover(self, event):
+        """Handle mouse hover over the plot"""
+        if event.inaxes != self.ax or not hasattr(self, 'current_fft_data'):
+            return
+        
+        # Get current FFT data
+        if not self.current_fft_data:
+            return
+            
+        frequencies = self.current_fft_data['frequencies']
+        amplitudes = self.current_fft_data['amplitudes']
+        
+        # Find the closest data point to the mouse cursor
+        if len(frequencies) > 1:
+            # Find closest frequency index
+            freq_idx = np.argmin(np.abs(frequencies - event.xdata))
+            
+            # Skip if too far from actual data
+            if abs(frequencies[freq_idx] - event.xdata) > (frequencies[-1] - frequencies[0]) * 0.02:
+                self.hide_hover_info()
+                return
+            
+            # Get the values
+            freq_val = frequencies[freq_idx]
+            amp_val = amplitudes[freq_idx]
+            
+            # Show hover information
+            self.show_hover_info(event, freq_val, amp_val, freq_idx)
+    
+    def show_hover_info(self, event, frequency, amplitude, index):
+        """Show hover information popup and highlight point"""
+        # Remove previous hover elements
+        self.hide_hover_info()
+        
+        # Create annotation for data info
+        info_text = f'Freq: {frequency:.2f} Hz\nAmp: {amplitude:.2e}\n(Click to pin)'
+        
+        self.hover_annotation = self.ax.annotate(
+            info_text,
+            xy=(frequency, amplitude),
+            xytext=(20, 20), textcoords='offset points',
+            bbox=dict(boxstyle='round,pad=0.5', facecolor='lightblue', alpha=0.8, edgecolor='blue'),
+            arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0', color='blue'),
+            fontsize=9,
+            ha='left',
+            zorder=20
+        )
+        
+        # Create highlighting dot
+        self.hover_line = self.ax.plot(frequency, amplitude, 'o', 
+                                      markersize=8, alpha=0.8, zorder=15, 
+                                      color='blue', markeredgecolor='white', markeredgewidth=2)[0]
+        
+        # Redraw canvas
+        self.canvas.draw_idle()
+    
+    def hide_hover_info(self):
+        """Hide hover information"""
+        if self.hover_annotation:
+            try:
+                self.hover_annotation.set_visible(False)
+                self.hover_annotation = None
+            except:
+                pass
+        
+        if self.hover_line:
+            try:
+                self.hover_line.remove()
+                self.hover_line = None
+            except:
+                pass
+        
+        self.canvas.draw_idle()
+    
+    def on_click(self, event):
+        """Handle mouse click to pin annotations"""
+        if event.inaxes != self.ax or not hasattr(self, 'current_fft_data'):
+            return
+        
+        if event.button == 1:  # Left click
+            # Get current FFT data
+            if not self.current_fft_data:
+                return
+                
+            frequencies = self.current_fft_data['frequencies']
+            amplitudes = self.current_fft_data['amplitudes']
+            
+            # Find the closest data point to the mouse cursor
+            if len(frequencies) > 1:
+                # Find closest frequency index
+                freq_idx = np.argmin(np.abs(frequencies - event.xdata))
+                
+                # Check if close enough to data
+                if abs(frequencies[freq_idx] - event.xdata) <= (frequencies[-1] - frequencies[0]) * 0.02:
+                    freq_val = frequencies[freq_idx]
+                    amp_val = amplitudes[freq_idx]
+                    
+                    # Create permanent annotation
+                    self.add_permanent_annotation(freq_val, amp_val)
+        
+        elif event.button == 3:  # Right click
+            # Check if right-clicking on an existing pin
+            clicked_pin = self.find_clicked_pin(event.xdata, event.ydata)
+            if clicked_pin is not None:
+                # Remove only the clicked pin
+                self.remove_specific_pin(clicked_pin)
+            else:
+                # If not clicking on a pin, clear all pins (original behavior)
+                self.clear_permanent_annotations()
+    
+    def find_clicked_pin(self, x_click, y_click):
+        """Find if the click is near an existing pin"""
+        if not hasattr(self, 'current_fft_data') or not self.current_fft_data:
+            return None
+            
+        # Get plot ranges for distance calculation
+        x_range = self.ax.get_xlim()[1] - self.ax.get_xlim()[0]
+        y_range = self.ax.get_ylim()[1] - self.ax.get_ylim()[0]
+        
+        # Define click tolerance (2% of plot range)
+        x_tolerance = x_range * 0.02
+        y_tolerance = y_range * 0.05  # Larger tolerance for y due to log scale
+        
+        # Check each pinned annotation
+        for i, pin in enumerate(self.permanent_annotations):
+            pin_x = pin['frequency']
+            pin_y = pin['amplitude']
+            
+            # Calculate distance (considering log scale for y)
+            x_distance = abs(x_click - pin_x)
+            
+            # For log scale, use relative distance
+            if y_click > 0 and pin_y > 0:
+                y_distance = abs(np.log10(y_click) - np.log10(pin_y))
+                y_tolerance_log = np.log10(self.ax.get_ylim()[1]) - np.log10(self.ax.get_ylim()[0])
+                y_tolerance_log *= 0.05
+                
+                if x_distance <= x_tolerance and y_distance <= y_tolerance_log:
+                    return i
+            else:
+                # Fallback for non-positive values
+                y_distance = abs(y_click - pin_y)
+                if x_distance <= x_tolerance and y_distance <= y_tolerance:
+                    return i
+        
+        return None
+    
+    def remove_specific_pin(self, pin_index):
+        """Remove a specific pin by index"""
+        if 0 <= pin_index < len(self.permanent_annotations):
+            pin = self.permanent_annotations[pin_index]
+            
+            # Remove the annotation and marker
+            try:
+                pin['annotation'].set_visible(False)
+                pin['marker'].remove()
+            except:
+                pass
+            
+            # Remove from list
+            self.permanent_annotations.pop(pin_index)
+            
+            # Update title
+            self.update_pins_title()
+            
+            # Redraw canvas
+            self.canvas.draw_idle()
+    
+    def update_pins_title(self):
+        """Update the plot title to reflect current number of pins"""
+        title_base = self.ax.get_title().split('\n')[0]  # Get base title without instruction
+        
+        if len(self.permanent_annotations) == 0:
+            self.ax.set_title(title_base)
+        elif len(self.permanent_annotations) == 1:
+            self.ax.set_title(f'{title_base}\n(1 pinned - Right-click pin to remove, right-click empty space to clear all)', fontsize=10)
+        else:
+            self.ax.set_title(f'{title_base}\n({len(self.permanent_annotations)} pinned - Right-click pin to remove, right-click empty space to clear all)', fontsize=10)
+    
+    def add_permanent_annotation(self, frequency, amplitude):
+        """Add a permanent annotation that stays on the plot"""
+        # Create permanent annotation
+        info_text = f'Freq: {frequency:.2f} Hz\nAmp: {amplitude:.2e}'
+        
+        permanent_annotation = self.ax.annotate(
+            info_text,
+            xy=(frequency, amplitude),
+            xytext=(15, 15), textcoords='offset points',
+            bbox=dict(boxstyle='round,pad=0.5', facecolor=self.settings['pin_face_color'], alpha=0.9, edgecolor=self.settings['pin_edge_color']),
+            arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0.1', color=self.settings['pin_edge_color']),
+            fontsize=8,
+            ha='left',
+            zorder=25
+        )
+        
+        # Create permanent marker
+        permanent_marker = self.ax.plot(frequency, amplitude, 'o', 
+                                       markersize=6, alpha=1.0, zorder=20, 
+                                       color='orange', markeredgecolor='red', markeredgewidth=1)[0]
+        
+        # Store both annotation and marker
+        self.permanent_annotations.append({
+            'annotation': permanent_annotation,
+            'marker': permanent_marker,
+            'frequency': frequency,
+            'amplitude': amplitude
+        })
+        
+        # Update title
+        self.update_pins_title()
+        
+        # Redraw canvas
+        self.canvas.draw_idle()
+    
+    def clear_permanent_annotations(self):
+        """Clear all permanent annotations"""
+        for item in self.permanent_annotations:
+            try:
+                item['annotation'].set_visible(False)
+                item['marker'].remove()
+            except:
+                pass
+        
+        self.permanent_annotations.clear()
+        
+        # Update title
+        self.update_pins_title()
+        
+        self.canvas.draw_idle()
+    
+    def on_leave(self, event):
+        """Handle mouse leaving the plot area"""
+        self.hide_hover_info()
+    
+    def on_combined_hover(self, event):
+        """Handle mouse hover over the combined results plot"""
+        if event.inaxes != self.combined_ax or not self.combined_data:
+            return
+        
+        # Find the closest data point across all combined datasets
+        closest_data = None
+        min_distance = float('inf')
+        
+        for result_id, data in self.combined_data.items():
+            frequencies = data['frequencies']
+            amplitudes = data['amplitudes']
+            
+            if len(frequencies) > 1:
+                # Find closest frequency index
+                freq_idx = np.argmin(np.abs(frequencies - event.xdata))
+                distance = abs(frequencies[freq_idx] - event.xdata)
+                
+                if distance < min_distance and distance < (frequencies[-1] - frequencies[0]) * 0.02:
+                    min_distance = distance
+                    closest_data = {
+                        'frequency': frequencies[freq_idx],
+                        'amplitude': amplitudes[freq_idx],
+                        'analysis_name': data['display_name'],
+                        'color': data['color']
+                    }
+        
+        if closest_data:
+            self.show_combined_hover_info(event, closest_data)
+        else:
+            self.hide_combined_hover_info()
+    
+    def show_combined_hover_info(self, event, data):
+        """Show hover information for combined plot"""
+        # Remove previous hover elements
+        self.hide_combined_hover_info()
+        
+        # Create annotation for data info
+        info_text = f'{data["analysis_name"]}\nFreq: {data["frequency"]:.2f} Hz\nAmp: {data["amplitude"]:.2e}\n(Click to pin)'
+        
+        self.combined_hover_annotation = self.combined_ax.annotate(
+            info_text,
+            xy=(data['frequency'], data['amplitude']),
+            xytext=(20, 20), textcoords='offset points',
+            bbox=dict(boxstyle='round,pad=0.5', facecolor='lightblue', alpha=0.8, edgecolor='blue'),
+            arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0', color='blue'),
+            fontsize=9,
+            ha='left',
+            zorder=20
+        )
+        
+        # Create highlighting dot
+        self.combined_hover_line = self.combined_ax.plot(
+            data['frequency'], data['amplitude'], 'o', 
+            markersize=8, alpha=0.8, zorder=15, color='blue', 
+            markeredgecolor='white', markeredgewidth=2
+        )[0]
+        
+        # Redraw canvas
+        self.combined_canvas.draw_idle()
+    
+    def hide_combined_hover_info(self):
+        """Hide combined hover information"""
+        if self.combined_hover_annotation:
+            try:
+                self.combined_hover_annotation.set_visible(False)
+                self.combined_hover_annotation = None
+            except:
+                pass
+        
+        if self.combined_hover_line:
+            try:
+                self.combined_hover_line.remove()
+                self.combined_hover_line = None
+            except:
+                pass
+        
+        self.combined_canvas.draw_idle()
+    
+    def on_combined_click(self, event):
+        """Handle mouse click on combined plot to pin annotations"""
+        if event.inaxes != self.combined_ax or not self.combined_data:
+            return
+        
+        if event.button == 1:  # Left click
+            # Find the closest data point across all combined datasets
+            closest_data = None
+            min_distance = float('inf')
+            
+            for result_id, data in self.combined_data.items():
+                frequencies = data['frequencies']
+                amplitudes = data['amplitudes']
+                
+                if len(frequencies) > 1:
+                    # Find closest frequency index
+                    freq_idx = np.argmin(np.abs(frequencies - event.xdata))
+                    distance = abs(frequencies[freq_idx] - event.xdata)
+                    
+                    if distance < min_distance and distance < (frequencies[-1] - frequencies[0]) * 0.02:
+                        min_distance = distance
+                        closest_data = {
+                            'frequency': frequencies[freq_idx],
+                            'amplitude': amplitudes[freq_idx],
+                            'analysis_name': data['display_name'],
+                            'color': data['color']
+                        }
+            
+            if closest_data:
+                self.add_combined_permanent_annotation(closest_data)
+        
+        elif event.button == 3:  # Right click
+            # Check if right-clicking on an existing pin
+            clicked_pin = self.find_combined_clicked_pin(event.xdata, event.ydata)
+            if clicked_pin is not None:
+                # Remove only the clicked pin
+                self.remove_combined_specific_pin(clicked_pin)
+            else:
+                # If not clicking on a pin, clear all pins
+                self.clear_combined_permanent_annotations()
+    
+    def find_combined_clicked_pin(self, x_click, y_click):
+        """Find if the click is near an existing pin on combined plot"""
+        # Get plot ranges for distance calculation
+        x_range = self.combined_ax.get_xlim()[1] - self.combined_ax.get_xlim()[0]
+        
+        # Define click tolerance
+        x_tolerance = x_range * 0.02
+        y_tolerance_log = np.log10(self.combined_ax.get_ylim()[1]) - np.log10(self.combined_ax.get_ylim()[0])
+        y_tolerance_log *= 0.05
+        
+        # Check each pinned annotation
+        for i, pin in enumerate(self.combined_permanent_annotations):
+            pin_x = pin['data']['frequency']
+            pin_y = pin['data']['amplitude']
+            
+            # Calculate distance
+            x_distance = abs(x_click - pin_x)
+            
+            # For log scale, use relative distance
+            if y_click > 0 and pin_y > 0:
+                y_distance = abs(np.log10(y_click) - np.log10(pin_y))
+                
+                if x_distance <= x_tolerance and y_distance <= y_tolerance_log:
+                    return i
+        
+        return None
+    
+    def remove_combined_specific_pin(self, pin_index):
+        """Remove a specific pin by index from combined plot"""
+        if 0 <= pin_index < len(self.combined_permanent_annotations):
+            pin = self.combined_permanent_annotations[pin_index]
+            
+            # Remove the annotation and marker
+            try:
+                pin['annotation'].set_visible(False)
+                pin['marker'].remove()
+            except:
+                pass
+            
+            # Remove from list
+            self.combined_permanent_annotations.pop(pin_index)
+            
+            # Update title
+            self.update_combined_pins_title()
+            
+            # Redraw canvas
+            self.combined_canvas.draw_idle()
+    
+    def update_combined_pins_title(self):
+        """Update the combined plot title to reflect current number of pins"""
+        title_base = self.combined_ax.get_title().split('\n')[0]  # Get base title without instruction
+        
+        if len(self.combined_permanent_annotations) == 0:
+            self.combined_ax.set_title(title_base)
+        elif len(self.combined_permanent_annotations) == 1:
+            self.combined_ax.set_title(f'{title_base}\n(1 pinned - Right-click pin to remove, right-click empty space to clear all)', fontsize=10)
+        else:
+            self.combined_ax.set_title(f'{title_base}\n({len(self.combined_permanent_annotations)} pinned - Right-click pin to remove, right-click empty space to clear all)', fontsize=10)
+    
+    def add_combined_permanent_annotation(self, data):
+        """Add a permanent annotation to combined plot"""
+        # Create permanent annotation
+        info_text = f'{data["analysis_name"]}\nFreq: {data["frequency"]:.2f} Hz\nAmp: {data["amplitude"]:.2e}'
+        
+        permanent_annotation = self.combined_ax.annotate(
+            info_text,
+            xy=(data['frequency'], data['amplitude']),
+            xytext=(15, 15), textcoords='offset points',
+            bbox=dict(boxstyle='round,pad=0.5', facecolor=self.settings['pin_face_color'], alpha=0.9, edgecolor=self.settings['pin_edge_color']),
+            arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0.1', color=self.settings['pin_edge_color']),
+            fontsize=8,
+            ha='left',
+            zorder=25
+        )
+        
+        # Create permanent marker
+        permanent_marker = self.combined_ax.plot(
+            data['frequency'], data['amplitude'], 'o', 
+            markersize=6, alpha=1.0, zorder=20, 
+            color='orange', markeredgecolor='red', markeredgewidth=1
+        )[0]
+        
+        # Store both annotation and marker
+        self.combined_permanent_annotations.append({
+            'annotation': permanent_annotation,
+            'marker': permanent_marker,
+            'data': data
+        })
+        
+        # Update title
+        self.update_combined_pins_title()
+        
+        # Redraw canvas
+        self.combined_canvas.draw_idle()
+    
+    def clear_combined_permanent_annotations(self):
+        """Clear all permanent annotations from combined plot"""
+        for item in self.combined_permanent_annotations:
+            try:
+                item['annotation'].set_visible(False)
+                item['marker'].remove()
+            except:
+                pass
+        
+        self.combined_permanent_annotations.clear()
+        
+        # Update title
+        self.update_combined_pins_title()
+        
+        self.combined_canvas.draw_idle()
+    
+    def on_combined_leave(self, event):
+        """Handle mouse leaving the combined plot area"""
+        self.hide_combined_hover_info()
     
     def run_fft_analysis(self):
         if self.df is None:
@@ -542,6 +1082,8 @@ class FFTAnalyzerApp:
             
             # Plot results
             self.ax.clear()
+            # Clear permanent annotations when starting new analysis
+            self.permanent_annotations.clear()
             
             color = self.current_colors[self.color_index % len(self.current_colors)]
             self.ax.semilogy(xf[1:], amplitude[1:], color=color, linewidth=1.5)
@@ -586,7 +1128,7 @@ class FFTAnalyzerApp:
                 'amplitudes': amplitude,
                 'column': column,
                 'display_name': display_name,
-                'study_name': self.study_name.get(),
+                'analysis_name': self.analysis_name.get(),
                 'freq_hz': freq_hz,
                 'start_line': start_line,
                 'n_lines': len(data),  # Actual number of lines used
@@ -645,6 +1187,51 @@ class FFTAnalyzerApp:
             except Exception as e:
                 messagebox.showerror("Error", f"Export failed:\n{str(e)}")
     
+    def on_treeview_click(self, event):
+        """Handle clicks on the treeview to toggle checkboxes"""
+        # Identify what was clicked
+        region = self.results_tree.identify("region", event.x, event.y)
+        if region == "cell":
+            column = self.results_tree.identify_column(event.x)
+            item = self.results_tree.identify_row(event.y)
+            
+            # Check if the Select column was clicked
+            if column == '#1' and item:  # #1 is the Select column
+                # Toggle checkbox state
+                current_state = self.checkbox_states.get(item, False)
+                new_state = not current_state
+                self.checkbox_states[item] = new_state
+                
+                # Update display
+                checkbox_text = '☑' if new_state else '☐'
+                values = list(self.results_tree.item(item, 'values'))
+                values[0] = checkbox_text  # Update the checkbox column
+                self.results_tree.item(item, values=values)
+    
+    def toggle_all_checkboxes(self):
+        """Toggle all checkboxes on/off"""
+        # Check if any items are currently checked
+        any_checked = any(self.checkbox_states.values())
+        
+        # If any are checked, uncheck all; otherwise check all
+        new_state = not any_checked
+        checkbox_text = '☑' if new_state else '☐'
+        
+        # Update all items
+        for item in self.results_tree.get_children():
+            self.checkbox_states[item] = new_state
+            values = list(self.results_tree.item(item, 'values'))
+            values[0] = checkbox_text
+            self.results_tree.item(item, values=values)
+    
+    def get_checked_items(self):
+        """Get list of checked items"""
+        checked_items = []
+        for item in self.results_tree.get_children():
+            if self.checkbox_states.get(item, False):
+                checked_items.append(item)
+        return checked_items
+    
     def save_to_results(self):
         if not hasattr(self, 'current_fft_data'):
             messagebox.showerror("Error", "No results to save. Run analysis first.")
@@ -656,10 +1243,13 @@ class FFTAnalyzerApp:
             self.fft_results[result_id] = self.current_fft_data.copy()
             
             # Add to treeview
-            self.results_tree.insert('', 'end', 
+            item_id = self.results_tree.insert('', 'end', 
                                 text=str(result_id),
-                                values=(self.current_fft_data['study_name'], 
+                                values=('☐', self.current_fft_data['analysis_name'], 
                                         self.current_fft_data['timestamp']))
+            
+            # Initialize checkbox state
+            self.checkbox_states[item_id] = False
             
             self.color_index += 1  # Move to next color for next analysis
             messagebox.showinfo("Success", "Results saved to Combined Results tab!")
@@ -668,21 +1258,32 @@ class FFTAnalyzerApp:
             messagebox.showerror("Error", f"Failed to save results:\n{str(e)}")
     
     def plot_combined_results(self):
-        selected_items = self.results_tree.selection()
-        if not selected_items:
-            messagebox.showwarning("Warning", "Please select results to plot.")
+        checked_items = self.get_checked_items()
+        if not checked_items:
+            messagebox.showwarning("Warning", "Please check some results to plot.")
             return
         
         try:
             self.combined_ax.clear()
+            self.combined_data = {}  # Clear previous combined data
+            self.combined_permanent_annotations.clear()  # Clear permanent annotations
             
-            for item in selected_items:
+            for item in checked_items:
                 result_id = int(self.results_tree.item(item, 'text'))
                 data = self.fft_results[result_id]
                 
+                # Plot the data
                 self.combined_ax.semilogy(data['frequencies'][1:], data['amplitudes'][1:], 
                                         color=data['color'], linewidth=1.5, 
                                         label=data['display_name'], alpha=0.8)
+                
+                # Store data for hover functionality
+                self.combined_data[result_id] = {
+                    'frequencies': data['frequencies'],
+                    'amplitudes': data['amplitudes'],
+                    'display_name': data['display_name'],
+                    'color': data['color']
+                }
             
             self.combined_ax.set_xlabel('Frequency (Hz)')
             self.combined_ax.set_ylabel('Amplitude')
@@ -697,21 +1298,25 @@ class FFTAnalyzerApp:
             messagebox.showerror("Error", f"Failed to plot results:\n{str(e)}")
     
     def remove_result(self):
-        selected_items = self.results_tree.selection()
-        if not selected_items:
-            messagebox.showwarning("Warning", "Please select results to remove.")
+        checked_items = self.get_checked_items()
+        if not checked_items:
+            messagebox.showwarning("Warning", "Please check some results to remove.")
             return
         
-        if messagebox.askyesno("Confirm", "Remove selected results?"):
-            for item in selected_items:
+        if messagebox.askyesno("Confirm", "Remove checked results?"):
+            for item in checked_items:
                 result_id = int(self.results_tree.item(item, 'text'))
                 if result_id in self.fft_results:
                     del self.fft_results[result_id]
+                # Remove from checkbox states
+                if item in self.checkbox_states:
+                    del self.checkbox_states[item]
                 self.results_tree.delete(item)
     
     def clear_all_results(self):
         if messagebox.askyesno("Confirm", "Clear all saved results?"):
             self.fft_results.clear()
+            self.checkbox_states.clear()  # Clear checkbox states
             for item in self.results_tree.get_children():
                 self.results_tree.delete(item)
             self.combined_ax.clear()
@@ -836,8 +1441,11 @@ class FFTAnalyzerApp:
             color_label = tk.Label(color_frame, text="  ", bg=color, width=3, height=1, relief=tk.RAISED)
             color_label.pack()
             
-            # Bind click to change color
-            color_label.bind("<Button-1>", lambda e, idx=i: self.change_color(idx))
+            # Bind click to change color - fix closure issue by creating a separate function
+            def make_color_changer(index):
+                return lambda e: self.change_color(index)
+            
+            color_label.bind("<Button-1>", make_color_changer(i))
     
     def change_color(self, index):
         color = colorchooser.askcolor(color=self.current_colors[index])
@@ -846,8 +1454,33 @@ class FFTAnalyzerApp:
             self.update_color_display()
     
     def reset_colors(self):
-        self.current_colors = self.settings['default_colors'].copy()
+        self.current_colors = self.original_default_colors.copy()
         self.update_color_display()
+    
+    def choose_pin_face_color(self):
+        """Open color chooser for pin face color"""
+        color = colorchooser.askcolor(color=self.pin_face_color_var.get(), title="Choose Pin Background Color")
+        if color[1]:  # If color was selected
+            self.pin_face_color_var.set(color[1])
+            self.face_color_button.configure(bg=color[1])
+            self.face_color_label.configure(text=color[1])
+    
+    def choose_pin_edge_color(self):
+        """Open color chooser for pin edge color"""
+        color = colorchooser.askcolor(color=self.pin_edge_color_var.get(), title="Choose Pin Border Color")
+        if color[1]:  # If color was selected
+            self.pin_edge_color_var.set(color[1])
+            self.edge_color_button.configure(bg=color[1])
+            self.edge_color_label.configure(text=color[1])
+    
+    def reset_pin_colors(self):
+        """Reset pin colors to default"""
+        self.pin_face_color_var.set('yellow')
+        self.pin_edge_color_var.set('orange')
+        self.face_color_button.configure(bg='yellow')
+        self.edge_color_button.configure(bg='orange')
+        self.face_color_label.configure(text='yellow')
+        self.edge_color_label.configure(text='orange')
     
     def save_settings(self):
         # Save all peak detection settings
@@ -860,6 +1493,10 @@ class FFTAnalyzerApp:
         self.settings['peak_window_size'] = self.window_size_var.get()
         self.settings['skip_dc_component'] = self.skip_dc_var.get()
         self.settings['default_colors'] = self.current_colors.copy()
+        
+        # Save pin color settings
+        self.settings['pin_face_color'] = self.pin_face_color_var.get()
+        self.settings['pin_edge_color'] = self.pin_edge_color_var.get()
         
         try:
             with open('fft_analyzer_settings.json', 'w') as f:
@@ -893,6 +1530,19 @@ class FFTAnalyzerApp:
                         self.window_size_var.set(self.settings.get('peak_window_size', 3))
                     if hasattr(self, 'skip_dc_var'):
                         self.skip_dc_var.set(self.settings.get('skip_dc_component', True))
+                    
+                    # Update pin color variables and UI elements if they exist
+                    if hasattr(self, 'pin_face_color_var'):
+                        face_color = self.settings.get('pin_face_color', 'yellow')
+                        self.pin_face_color_var.set(face_color)
+                        self.face_color_button.configure(bg=face_color)
+                        self.face_color_label.configure(text=face_color)
+                    
+                    if hasattr(self, 'pin_edge_color_var'):
+                        edge_color = self.settings.get('pin_edge_color', 'orange')
+                        self.pin_edge_color_var.set(edge_color)
+                        self.edge_color_button.configure(bg=edge_color)
+                        self.edge_color_label.configure(text=edge_color)
         except Exception as e:
             print(f"Failed to load settings: {e}")
 
